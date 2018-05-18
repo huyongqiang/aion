@@ -38,7 +38,6 @@ import java.util.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
-import org.aion.base.db.IByteArrayKeyValueDatabase;
 import org.aion.base.db.IByteArrayKeyValueStore;
 import org.aion.base.util.ByteArrayWrapper;
 import org.aion.log.AionLoggerFactory;
@@ -80,13 +79,13 @@ public class JournalPruneDataSource implements IByteArrayKeyValueStore {
 
     Map<ByteArrayWrapper, Ref> refCount = new HashMap<>();
 
-    private IByteArrayKeyValueDatabase src;
+    private IByteArrayKeyValueStore src;
     // block hash => updates
     private LinkedHashMap<ByteArrayWrapper, Updates> blockUpdates = new LinkedHashMap<>();
     private Updates currentUpdates = new Updates();
     private AtomicBoolean enabled = new AtomicBoolean(true);
 
-    public JournalPruneDataSource(IByteArrayKeyValueDatabase src) {
+    public JournalPruneDataSource(IByteArrayKeyValueStore src) {
         this.src = src;
     }
 
@@ -114,7 +113,7 @@ public class JournalPruneDataSource implements IByteArrayKeyValueStore {
                     src.put(key, value);
 
                 } else {
-                    checkOpen();
+                    check();
 
                     // Value does not exist, so we delete from current updates
                     currentUpdates.deletedKeys.add(keyW);
@@ -124,7 +123,7 @@ public class JournalPruneDataSource implements IByteArrayKeyValueStore {
                 if (value != null) {
                     src.put(key, value);
                 } else {
-                    checkOpen();
+                    check();
                 }
             }
         } catch (Exception e) {
@@ -147,7 +146,7 @@ public class JournalPruneDataSource implements IByteArrayKeyValueStore {
         lock.writeLock().lock();
 
         try {
-            checkOpen();
+            check();
 
             currentUpdates.deletedKeys.add(ByteArrayWrapper.wrap(key));
             // delete is delayed
@@ -345,6 +344,8 @@ public class JournalPruneDataSource implements IByteArrayKeyValueStore {
 
         try {
             src.close();
+        } catch (Exception e) {
+            LOG.error("Could not close source due to ", e);
         } finally {
             lock.writeLock().unlock();
         }
@@ -370,7 +371,7 @@ public class JournalPruneDataSource implements IByteArrayKeyValueStore {
         lock.writeLock().lock();
 
         try {
-            checkOpen();
+            check();
 
             // deletes are delayed
             keys.forEach(key -> currentUpdates.deletedKeys.add(ByteArrayWrapper.wrap(key)));
@@ -392,7 +393,7 @@ public class JournalPruneDataSource implements IByteArrayKeyValueStore {
         try {
             // the delayed deletes are not considered by this check until applied to the db
             if (!currentUpdates.insertedKeys.isEmpty()) {
-                checkOpen();
+                check();
                 return false;
             } else {
                 return src.isEmpty();
@@ -405,21 +406,13 @@ public class JournalPruneDataSource implements IByteArrayKeyValueStore {
         }
     }
 
-    public IByteArrayKeyValueDatabase getSrc() {
+    public IByteArrayKeyValueStore getSrc() {
         return src;
     }
 
-    /**
-     * Checks that the data store connection is open. Throws a {@link RuntimeException} if the data
-     * store connection is closed.
-     *
-     * @implNote Always do this check after acquiring a lock on the class/data. Otherwise it might
-     *     produce inconsistent results due to lack of synchronization.
-     */
-    protected void checkOpen() {
-        if (!src.isOpen()) {
-            throw new RuntimeException("Data store is not opened: " + src);
-        }
+    @Override
+    public void check() {
+        src.check();
     }
 
     /**
